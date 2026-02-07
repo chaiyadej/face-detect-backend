@@ -1,0 +1,140 @@
+<!doctype html>
+<html>
+  <head>
+    <title>Multi-Face Guard System</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        background: #222;
+        color: white;
+        text-align: center;
+      }
+      .container {
+        position: relative;
+        margin: 20px auto;
+        width: 640px;
+      }
+      video {
+        width: 100%;
+        border-radius: 8px;
+        transform: scaleX(-1);
+      } /* กลับด้านกระจกเงา */
+      canvas {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        transform: scaleX(-1);
+      }
+      .status {
+        margin-top: 10px;
+        color: #0f0;
+      }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+  </head>
+  <body>
+    <h1>🚨 Multi-Face Detection & Notify</h1>
+    <div class="container">
+      <video id="input_video"></video>
+      <canvas id="output_canvas"></canvas>
+    </div>
+    <div class="status" id="status_msg">System Ready...</div>
+
+    <script>
+      const videoElement = document.getElementById("input_video");
+      const canvasElement = document.getElementById("output_canvas");
+      const canvasCtx = canvasElement.getContext("2d");
+      const statusMsg = document.getElementById("status_msg");
+
+      // --- Logic ป้องกัน Spam (Cooldown) ---
+      let lastNotificationTime = 0;
+      const NOTIFICATION_COOLDOWN = 10000; // 10 วินาที (ส่งแจ้งเตือนได้ไม่เกิน 1 ครั้งทุก 10 วิ)
+
+      function onResults(results) {
+        // ตั้งค่าขนาด Canvas ให้ตรงกับ Video
+        canvasElement.width = videoElement.videoWidth;
+        canvasElement.height = videoElement.videoHeight;
+
+        canvasCtx.save();
+        canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+        canvasCtx.drawImage(
+          results.image,
+          0,
+          0,
+          canvasElement.width,
+          canvasElement.height,
+        );
+
+        if (results.detections.length > 0) {
+          // 1. วาดกรอบสี่เหลี่ยมรอบใบหน้า
+          for (const detection of results.detections) {
+            drawRectangle(canvasCtx, detection.boundingBox, {
+              color: "red",
+              lineWidth: 4,
+            });
+          }
+
+          // 2. ตรวจสอบ Cooldown ก่อนส่งแจ้งเตือน
+          const currentTime = new Date().getTime();
+          if (currentTime - lastNotificationTime > NOTIFICATION_COOLDOWN) {
+            statusMsg.innerText = `📸 Detecting ${results.detections.length} faces! Sending Alert...`;
+
+            // แคปภาพหน้าจอขณะนั้น (ทั้งเฟรม)
+            const imageData = canvasElement.toDataURL("image/jpeg", 0.8);
+
+            // ส่งไป Backend
+            sendNotification(results.detections.length, imageData);
+
+            lastNotificationTime = currentTime;
+          }
+        } else {
+          statusMsg.innerText = "System Scanning...";
+        }
+        canvasCtx.restore();
+      }
+
+      async function sendNotification(count, base64Image) {
+        try {
+          const response = await fetch("http://127.0.0.1:5000/detect-action", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ face_count: count, image: base64Image }),
+          });
+          const result = await response.json();
+          console.log("Server response:", result);
+          statusMsg.innerText = "✅ Alert Sent!";
+        } catch (error) {
+          console.error("Error sending notification:", error);
+          statusMsg.innerText = "❌ Connection Error";
+        }
+      }
+
+      // --- ตั้งค่า MediaPipe ---
+      const faceDetection = new FaceDetection({
+        locateFile: (file) => {
+          return `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${file}`;
+        },
+      });
+
+      faceDetection.setOptions({
+        modelSelection: 0, // 0 = ระยะใกล้ (2m), 1 = ระยะไกล (5m)
+        minDetectionConfidence: 0.5,
+      });
+
+      faceDetection.onResults(onResults);
+
+      const camera = new Camera(videoElement, {
+        onFrame: async () => {
+          await faceDetection.send({ image: videoElement });
+        },
+        width: 640,
+        height: 480,
+      });
+      camera.start();
+    </script>
+  </body>
+</html>
