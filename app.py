@@ -1,48 +1,57 @@
-# app.py (Backend)
+# app.py (สำหรับ LINE Messaging API - Broadcast)
+import os
+import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import requests
-import os
-import base64
-import re
 
 app = Flask(__name__)
 CORS(app)
 
-# ดึง Token จาก Environment Variable ที่คุณเพิ่งตั้ง
-LINE_NOTIFY_TOKEN = os.environ.get('LINE_NOTIFY_TOKEN')
-# แก้บรรทัดนี้ใน app.py ให้เหมือนเป๊ะๆ
-LINE_API_URL = 'https://notify-api.line.me/api/notify'
+# 1. เปลี่ยนชื่อตัวแปรให้ตรงกับ Messaging API
+# (ต้องไปแก้ใน Render Environment Variables ด้วยนะครับ)
+LINE_CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')
+
+# 2. URL สำหรับ Broadcast (ถูกต้องตามที่คุณบอก)
+LINE_API_URL = 'https://api.line.me/v2/bot/message/broadcast'
 
 @app.route('/detect-action', methods=['POST'])
 def detect_action():
     try:
         data = request.json
         face_count = data.get('face_count', 0)
-        image_base64 = data.get('image', '')
-
-        if not LINE_NOTIFY_TOKEN:
-            return jsonify({'status': 'error', 'message': 'Token not found on Server'}), 500
-
-        # --- ส่วนสำคัญ: แปลงภาพให้ชัวร์ ---
-        # 1. ถ้ามี header "data:image/jpeg;base64," ให้ตัดทิ้ง
-        if "," in image_base64:
-            image_base64 = image_base64.split(",")[1]
         
-        # 2. แปลงกลับเป็นไฟล์ภาพ
-        image_bytes = base64.b64decode(image_base64)
+        # หมายเหตุ: Messaging API แบบ Broadcast ส่งรูปโดยตรงไม่ได้
+        # ต้องฝากรูปไว้ที่อื่นแล้วส่งเป็น Link เท่านั้น
+        # เบื้องต้นเราจะส่งเป็น "ข้อความ" เพื่อแจ้งเตือนก่อนครับ
         
-        # 3. เตรียมส่งเข้า LINE
-        headers = {'Authorization': f'Bearer {LINE_NOTIFY_TOKEN}'}
-        payload = {'message': f'ตรวจพบใบหน้า: {face_count} คน'}
-        files = {'imageFile': image_bytes}
+        if not LINE_CHANNEL_ACCESS_TOKEN:
+             print("Error: Token missing")
+             return jsonify({'status': 'error', 'message': 'Token missing'}), 500
 
-        response = requests.post(LINE_API_URL, headers=headers, data=payload, files=files)
+        # 3. เตรียมข้อมูลส่ง LINE (เปลี่ยนรูปแบบเป็น JSON)
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {LINE_CHANNEL_ACCESS_TOKEN}'
+        }
+
+        # ข้อความที่จะส่ง
+        payload = {
+            "messages": [
+                {
+                    "type": "text",
+                    "text": f"🚨 แจ้งเตือนความปลอดภัย!\n📸 ตรวจพบใบหน้า: {face_count} คน\n(ขณะนี้ระบบรองรับการแจ้งเตือนแบบข้อความ)"
+                }
+            ]
+        }
+
+        # 4. ยิง Request ไปที่ LINE
+        print(f"Broadcasting to LINE...")
+        response = requests.post(LINE_API_URL, headers=headers, json=payload)
 
         if response.status_code == 200:
-            return jsonify({'status': 'success', 'message': 'Sent to LINE'}), 200
+            return jsonify({'status': 'success', 'message': 'Broadcast sent'}), 200
         else:
-            # ถ้า LINE ปฏิเสธ ให้ส่ง Error กลับไปบอกหน้าเว็บ
+            print(f"LINE Error: {response.text}")
             return jsonify({'status': 'error', 'message': f'LINE API Error: {response.text}'}), 500
 
     except Exception as e:
@@ -50,4 +59,5 @@ def detect_action():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000)
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
