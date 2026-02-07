@@ -99,11 +99,14 @@
 
       async function sendNotification(count, base64Image) {
         try {
-          const response = await fetch("http://127.0.0.1:5000/detect-action", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ face_count: count, image: base64Image }),
-          });
+          const response = await fetch(
+            "https://face-detect-backend-743m.onrender.com/detect-action",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ face_count: count, image: base64Image }),
+            },
+          );
           const result = await response.json();
           console.log("Server response:", result);
           statusMsg.innerText = "✅ Alert Sent!";
