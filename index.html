@@ -1,143 +1,236 @@
 <!doctype html>
 <html>
   <head>
-    <title>Multi-Face Guard System</title>
+    <meta charset="utf-8" />
+    <title>Face Detection (Full Data Fix)</title>
+
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/blazeface"></script>
+
     <style>
       body {
         font-family: sans-serif;
+        text-align: center;
         background: #222;
         color: white;
-        text-align: center;
+        margin: 0;
+        padding-top: 20px;
       }
+
       .container {
         position: relative;
-        margin: 20px auto;
+        margin: 10px auto;
         width: 640px;
+        height: 480px;
+        border: 3px solid #444;
+        background: #000;
+        overflow: hidden;
+        border-radius: 8px;
       }
+
       video {
         width: 100%;
-        border-radius: 8px;
+        height: 100%;
+        object-fit: cover;
         transform: scaleX(-1);
-      } /* กลับด้านกระจกเงา */
+        display: block;
+      }
+
       canvas {
         position: absolute;
-        left: 0;
         top: 0;
+        left: 0;
         width: 100%;
         height: 100%;
         transform: scaleX(-1);
+        pointer-events: none;
       }
-      .status {
-        margin-top: 10px;
-        color: #0f0;
+
+      .controls {
+        margin-top: 20px;
+      }
+
+      button {
+        padding: 15px 30px;
+        font-size: 20px;
+        cursor: pointer;
+        background: #28a745;
+        color: white;
+        border: none;
+        border-radius: 8px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        transition: 0.2s;
+      }
+      button:disabled {
+        background: #555;
+        cursor: not-allowed;
+      }
+
+      #status_msg {
+        margin-top: 15px;
+        font-size: 18px;
+        color: yellow;
+        min-height: 30px;
       }
     </style>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
   </head>
+
   <body>
-    <h1>🚨 Multi-Face Detection & Notify</h1>
+    <h1>📸 Face Detection (Server Sync)</h1>
+
     <div class="container">
-      <video id="input_video"></video>
+      <video id="input_video" autoplay playsinline muted></video>
       <canvas id="output_canvas"></canvas>
     </div>
-    <div class="status" id="status_msg">System Ready...</div>
+
+    <div class="controls">
+      <button id="btnSnap" onclick="captureSnapshot()" disabled>
+        ⏳ System Initializing...
+      </button>
+    </div>
+
+    <div id="status_msg">1. Connecting Camera...</div>
 
     <script>
-      const videoElement = document.getElementById("input_video");
-      const canvasElement = document.getElementById("output_canvas");
-      const canvasCtx = canvasElement.getContext("2d");
+      const video = document.getElementById("input_video");
+      const canvas = document.getElementById("output_canvas");
+      const ctx = canvas.getContext("2d");
       const statusMsg = document.getElementById("status_msg");
+      const btnSnap = document.getElementById("btnSnap");
 
-      // --- Logic ป้องกัน Spam (Cooldown) ---
-      let lastNotificationTime = 0;
-      const NOTIFICATION_COOLDOWN = 10000; // 10 วินาที (ส่งแจ้งเตือนได้ไม่เกิน 1 ครั้งทุก 10 วิ)
+      let model = null;
+      let isCameraReady = false;
 
-      function onResults(results) {
-        // ตั้งค่าขนาด Canvas ให้ตรงกับ Video
-        canvasElement.width = videoElement.videoWidth;
-        canvasElement.height = videoElement.videoHeight;
-
-        canvasCtx.save();
-        canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-        canvasCtx.drawImage(
-          results.image,
-          0,
-          0,
-          canvasElement.width,
-          canvasElement.height,
-        );
-
-        if (results.detections.length > 0) {
-          // 1. วาดกรอบสี่เหลี่ยมรอบใบหน้า
-          for (const detection of results.detections) {
-            drawRectangle(canvasCtx, detection.boundingBox, {
-              color: "red",
-              lineWidth: 4,
-            });
-          }
-
-          // 2. ตรวจสอบ Cooldown ก่อนส่งแจ้งเตือน
-          const currentTime = new Date().getTime();
-          if (currentTime - lastNotificationTime > NOTIFICATION_COOLDOWN) {
-            statusMsg.innerText = `📸 Detecting ${results.detections.length} faces! Sending Alert...`;
-
-            // แคปภาพหน้าจอขณะนั้น (ทั้งเฟรม)
-            const imageData = canvasElement.toDataURL("image/jpeg", 0.8);
-
-            // ส่งไป Backend
-            sendNotification(results.detections.length, imageData);
-
-            lastNotificationTime = currentTime;
-          }
-        } else {
-          statusMsg.innerText = "System Scanning...";
-        }
-        canvasCtx.restore();
-      }
-
-      async function sendNotification(count, base64Image) {
+      async function startCamera() {
         try {
-          const response = await fetch(
-            "https://face-detect-backend-743m.onrender.com/detect-action",
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ face_count: count, image: base64Image }),
-            },
-          );
-          const result = await response.json();
-          console.log("Server response:", result);
-          statusMsg.innerText = "✅ Alert Sent!";
-        } catch (error) {
-          console.error("Error sending notification:", error);
-          statusMsg.innerText = "❌ Connection Error";
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: { width: 640, height: 480, facingMode: "user" },
+          });
+          video.srcObject = stream;
+          video.play();
+
+          statusMsg.innerText = "2. Waiting for video stream...";
+
+          const checkVideo = setInterval(() => {
+            if (video.readyState >= 3 && video.videoWidth > 0) {
+              clearInterval(checkVideo);
+              onVideoReady();
+            }
+          }, 500);
+        } catch (err) {
+          console.error("Camera Error:", err);
+          statusMsg.innerText = "❌ Camera Access Denied!";
         }
       }
 
-      // --- ตั้งค่า MediaPipe ---
-      const faceDetection = new FaceDetection({
-        locateFile: (file) => {
-          return `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${file}`;
-        },
-      });
+      function onVideoReady() {
+        if (isCameraReady) return;
+        isCameraReady = true;
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        statusMsg.innerText = "3. Camera OK! Loading AI...";
+        loadAI();
+      }
 
-      faceDetection.setOptions({
-        modelSelection: 0, // 0 = ระยะใกล้ (2m), 1 = ระยะไกล (5m)
-        minDetectionConfidence: 0.5,
-      });
+      async function loadAI() {
+        try {
+          model = await blazeface.load();
+          console.log("AI Loaded!");
+          btnSnap.disabled = false;
+          btnSnap.innerText = "📸 CAPTURE & ANALYZE";
+          statusMsg.innerText = "✅ Ready!";
+          statusMsg.style.color = "#0f0";
+        } catch (err) {
+          console.error(err);
+          statusMsg.innerText = "❌ AI Load Failed";
+        }
+      }
 
-      faceDetection.onResults(onResults);
+      async function captureSnapshot() {
+        if (!model) return;
 
-      const camera = new Camera(videoElement, {
-        onFrame: async () => {
-          await faceDetection.send({ image: videoElement });
-        },
-        width: 640,
-        height: 480,
-      });
-      camera.start();
+        btnSnap.disabled = true;
+        statusMsg.innerText = "🔍 Scanning Face...";
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        try {
+          const predictions = await model.estimateFaces(video, false);
+
+          if (predictions.length > 0) {
+            statusMsg.innerText = `Found ${predictions.length} Faces! Sending...`;
+            statusMsg.style.color = "#ffcc00";
+
+            predictions.forEach((pred) => {
+              const start = pred.topLeft;
+              const end = pred.bottomRight;
+              const size = [end[0] - start[0], end[1] - start[1]];
+              ctx.beginPath();
+              ctx.rect(start[0], start[1], size[0], size[1]);
+              ctx.lineWidth = 5;
+              ctx.strokeStyle = "#00FF00";
+              ctx.stroke();
+            });
+
+            const tempCanvas = document.createElement("canvas");
+            tempCanvas.width = video.videoWidth;
+            tempCanvas.height = video.videoHeight;
+            const tCtx = tempCanvas.getContext("2d");
+            tCtx.translate(tempCanvas.width, 0);
+            tCtx.scale(-1, 1);
+            tCtx.drawImage(video, 0, 0);
+
+            // ใช้ fullBase64 (ไม่ตัด) และลด Quality เหลือ 0.5
+            const fullBase64 = tempCanvas.toDataURL("image/jpeg", 0.5);
+
+            sendToBackend(predictions.length, fullBase64);
+          } else {
+            statusMsg.innerText = "⚠️ No face detected.";
+            statusMsg.style.color = "orange";
+            setTimeout(resetUI, 1500);
+          }
+        } catch (err) {
+          console.error(err);
+          statusMsg.innerText = "❌ Error processing image";
+          resetUI();
+        }
+      }
+
+      function sendToBackend(count, imgData) {
+        // ส่งแบบเต็มๆ ไม่ต้อง .split()
+        fetch("https://face-detect-backend-743m.onrender.com/detect-action", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            face_count: count,
+            image: imgData,
+          }),
+        })
+          .then(async (res) => {
+            if (res.ok) {
+              statusMsg.innerText = "✅ Sent Successfully!";
+            } else {
+              // อ่าน Error ที่ Server ส่งกลับมา
+              const errorJson = await res.json();
+              console.error("Server Error Detail:", errorJson);
+              statusMsg.innerText = `❌ Server Fail: ${errorJson.message || res.status}`;
+            }
+          })
+          .catch((err) => {
+            console.error("Fetch error:", err);
+            statusMsg.innerText = "❌ Connection Failed";
+          })
+          .finally(() => setTimeout(resetUI, 3000));
+      }
+
+      function resetUI() {
+        btnSnap.disabled = false;
+        btnSnap.innerText = "📸 CAPTURE & ANALYZE";
+        statusMsg.innerText = "✅ Ready";
+        statusMsg.style.color = "#0f0";
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+
+      startCamera();
     </script>
   </body>
 </html>
