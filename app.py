@@ -11,6 +11,7 @@ CORS(app)
 
 # ดึง Token จาก Environment Variable ที่คุณเพิ่งตั้ง
 LINE_NOTIFY_TOKEN = os.environ.get('LINE_NOTIFY_TOKEN')
+# แก้บรรทัดนี้ใน app.py ให้เหมือนเป๊ะๆ
 LINE_API_URL = 'https://notify-api.line.me/api/notify'
 
 @app.route('/detect-action', methods=['POST'])
